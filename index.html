@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>AI 编程助手</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#1e1e2e;--bg2:#181825;--bg3:#313244;--bg4:#45475a;--fg:#cdd6f4;--fg2:#a6adc8;--blue:#89b4fa;--green:#a6e3a1;--red:#f38ba8;--yellow:#f9e2af;--font:-apple-system,sans-serif;--mono:'Fira Code','Consolas',monospace}
+body{font-family:var(--font);height:100vh;height:100dvh;background:var(--bg);color:var(--fg);display:flex;flex-direction:column;overflow:hidden}
+.hdr{padding:8px 12px;background:var(--bg2);border-bottom:1px solid var(--bg3);display:flex;align-items:center;gap:8px;flex-shrink:0}
+.hdr h1{font-size:14px;white-space:nowrap}
+.hdr .cfg-btn{background:none;border:1px solid var(--bg4);color:var(--fg2);padding:4px 10px;border-radius:5px;font-size:12px;cursor:pointer}
+.cfg-modal{display:none;position:fixed;inset:0;z-index:100;background:#000a;justify-content:center;align-items:center}
+.cfg-modal.show{display:flex}
+.cfg-box{background:var(--bg2);border:1px solid var(--bg3);border-radius:12px;padding:20px;width:90%;max-width:420px}
+.cfg-box label{display:block;font-size:12px;color:var(--fg2);margin:10px 0 4px}
+.cfg-box input{width:100%;background:var(--bg3);border:1px solid var(--bg4);color:var(--fg);padding:8px;border-radius:6px;font-size:13px}
+.cfg-box .row{display:flex;gap:8px;margin-top:14px}
+.cfg-box .row button{flex:1;padding:8px;border:none;border-radius:6px;font-weight:600;cursor:pointer;font-size:13px}
+.cfg-box .btn-ok{background:var(--blue);color:var(--bg)}
+.cfg-box .btn-test{background:var(--bg3);color:var(--fg);border:1px solid var(--bg4)!important}
+.cfg-box .test-result{margin-top:10px;padding:8px;border-radius:6px;font-size:12px;display:none}
+.cfg-box .test-result.ok{display:block;background:#a6e3a122;color:var(--green)}
+.cfg-box .test-result.fail{display:block;background:#f38ba822;color:var(--red)}
+.cfg-box .test-result.loading{display:block;background:var(--bg3);color:var(--fg2)}
+.body{flex:1;overflow:hidden;position:relative}
+.panel{position:absolute;inset:0;display:flex;flex-direction:column;overflow:hidden;visibility:hidden;pointer-events:none}
+.panel.active{visibility:visible;pointer-events:auto}
+.msgs{flex:1;overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:8px;-webkit-overflow-scrolling:touch}
+.msg{padding:8px 11px;border-radius:8px;font-size:13px;line-height:1.55;white-space:pre-wrap;word-break:break-word;max-width:92%}
+.msg.user{background:var(--bg4);align-self:flex-end}
+.msg.ai{background:var(--bg3);align-self:flex-start}
+.msg .abtn{margin-top:5px;padding:3px 9px;background:var(--green);color:var(--bg);border:none;border-radius:4px;cursor:pointer;font-size:11px;font-weight:600}
+.msg .abtn.applied{background:var(--bg4);color:var(--fg2)}
+.iarea{padding:8px;border-top:1px solid var(--bg3);display:flex;gap:6px;flex-shrink:0}
+.iarea textarea{flex:1;background:var(--bg3);border:1px solid var(--bg4);color:var(--fg);padding:8px;border-radius:6px;font-size:13px;resize:none;height:48px;font-family:var(--font)}
+.iarea button{background:var(--blue);color:var(--bg);border:none;padding:0 14px;border-radius:6px;font-weight:600;cursor:pointer;font-size:13px}
+.iarea button:disabled{opacity:.4}
+.ed-bar{display:flex;background:var(--bg2);border-bottom:1px solid var(--bg3);padding:4px 6px;gap:4px;align-items:center;flex-shrink:0;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.ed-bar::-webkit-scrollbar{display:none}
+.ftab{padding:5px 10px;font-size:11px;cursor:pointer;border-radius:4px;background:transparent;border:none;color:var(--fg2);white-space:nowrap;flex-shrink:0}
+.ftab.active{background:var(--bg3);color:var(--fg)}
+.ed-tools{display:flex;gap:4px;margin-left:auto;flex-shrink:0}
+.ed-tools button{background:var(--bg3);border:1px solid var(--bg4);color:var(--fg2);padding:4px 8px;border-radius:4px;font-size:11px;cursor:pointer;white-space:nowrap}
+.ed-wrap{flex:1;display:flex;overflow:hidden}
+.lnums{background:var(--bg2);color:#585b70;padding:10px 6px 10px 2px;font-family:var(--mono);font-size:12px;line-height:1.6;text-align:right;user-select:none;overflow:hidden;min-width:32px;flex-shrink:0}
+.lnums .ln{padding:0 3px}.lnums .ln.err{color:var(--red);background:#f38ba822;cursor:pointer}
+#ed{flex:1;width:0;background:var(--bg);color:var(--fg);border:none;padding:10px;font-family:var(--mono);font-size:12px;line-height:1.6;resize:none;tab-size:2;outline:none;white-space:pre;overflow-wrap:normal;-webkit-overflow-scrolling:touch}
+.pv-frame{flex:1;border:none;background:#fff;width:100%}
+.pv-tools{display:flex;gap:4px;padding:6px 10px;background:var(--bg2);border-top:1px solid var(--bg3);flex-shrink:0;flex-wrap:wrap}
+.pv-tools button{background:var(--bg3);border:1px solid var(--bg4);color:var(--fg2);padding:5px 10px;border-radius:4px;font-size:11px;cursor:pointer}
+.pv-tools button.fix{background:var(--red);color:var(--bg);border-color:var(--red);font-weight:600}
+.con{background:#11111b;border-top:1px solid var(--bg3);flex-shrink:0;display:flex;flex-direction:column;max-height:40%}
+.con.hidden{display:none}
+.con-hdr{display:flex;align-items:center;padding:4px 10px;background:var(--bg2);border-bottom:1px solid var(--bg3);gap:6px;font-size:11px;flex-shrink:0}
+.con-hdr span:first-child{flex:1;font-weight:600}
+.badge{padding:1px 6px;border-radius:8px;font-size:10px;font-weight:700}
+.badge.e{background:var(--red);color:var(--bg)}.badge.w{background:var(--yellow);color:var(--bg)}.badge.l{background:var(--bg4);color:var(--fg)}
+.con-hdr button{background:none;border:none;color:var(--fg2);cursor:pointer;font-size:13px}
+.con-body{flex:1;overflow-y:auto;padding:4px 10px;font-family:var(--mono);font-size:11px;line-height:1.7;-webkit-overflow-scrolling:touch;min-height:60px}
+.clog{border-bottom:1px solid #18182544;padding:2px 0;display:flex;gap:6px}
+.clog .cloc{color:#585b70;margin-left:auto;white-space:nowrap;cursor:pointer;text-decoration:underline;flex-shrink:0}
+.clog.log{color:var(--fg)}.clog.warn{color:var(--yellow)}.clog.error{color:var(--red)}.clog.info{color:var(--blue)}
+.con-inp{display:flex;border-top:1px solid var(--bg3);flex-shrink:0}
+.con-inp span{padding:3px 6px;color:var(--blue);font-family:monospace;font-size:12px}
+.con-inp input{flex:1;background:transparent;border:none;color:var(--fg);font-family:var(--mono);font-size:11px;padding:3px;outline:none}
+.nav{display:flex;background:var(--bg2);border-top:1px solid var(--bg3);flex-shrink:0}
+.nav button{flex:1;padding:10px 0;background:none;border:none;color:var(--fg2);font-size:12px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:2px}
+.nav button.active{color:var(--blue)}
+.nav button .ico{font-size:18px}
+@media(min-width:768px){
+  .body{display:flex;flex-direction:row}
+  .panel{position:static;visibility:visible!important;pointer-events:auto!important}
+  .panel.p-chat{width:380px;border-right:1px solid var(--bg3)}
+  .panel.p-edit{flex:1}
+  .panel.p-preview{flex:1;border-left:1px solid var(--bg3)}
+  .nav{display:none}
+}
+#fileInput{display:none}
+</style>
+</head>
+<body>
+
+<div class="hdr">
+  <h1>🤖 AI编程</h1>
+  <button class="cfg-btn" onclick="newChat()" style="color:var(--green);border-color:var(--green)">＋ 新对话</button><button class="cfg-btn" onclick="$('cfgModal').classList.add('show')">⚙ 设置</button>
+</div>
+
+
+<div class="cfg-modal" id="cfgModal" onclick="if(event.target===this)this.classList.remove('show')">
+  <div class="cfg-box">
+    <label>模型名称（自由填写）</label>
+    <input id="model" type="text" placeholder="如 deepseek-chat, gpt-4o, qwen-plus ...">
+    <label>API Key</label>
+    <input id="key" type="password" placeholder="sk-...">
+    <label>API Base URL</label>
+    <input id="base" type="text" placeholder="https://api.deepseek.com/v1">
+    <div class="test-result" id="testResult"></div>
+    <div class="row">
+      <button class="btn-test" onclick="testAPI()">🔌 测试连接</button>
+      <button class="btn-ok" onclick="saveCfg()">✓ 保存</button>
+    </div>
+  </div>
+</div>
+
+<input type="file" id="fileInput" multiple accept="*/*">
+
+<div class="body">
+  <div class="panel p-chat active" id="panelChat">
+    <div class="msgs" id="msgs"></div>
+    <div class="iarea">
+      <textarea id="inp" placeholder="描述需求..." rows="2"></textarea>
+      <button id="btn" onclick="send()">发送</button>
+    </div>
+  </div>
+  <div class="panel p-edit" id="panelEdit">
+    <div class="ed-bar">
+      <div id="tabsWrap"></div>
+      <div class="ed-tools">
+        <button onclick="importFiles()">📂 导入</button>
+        <button onclick="addF()">+</button>
+        <button onclick="dl()">💾</button>
+        <button onclick="delF()">🗑️</button>
+        <button onclick="undo()">↩️</button>
+      </div>
+    </div>
+    <div class="ed-wrap">
+      <div class="lnums" id="ln"></div>
+      <textarea id="ed" spellcheck="false"></textarea>
+    </div>
+  </div>
+  <div class="panel p-preview" id="panelPreview">
+    <iframe class="pv-frame" id="pv"></iframe>
+    <div class="con hidden" id="conPanel">
+      <div class="con-hdr">
+        <span>控制台</span>
+        <span class="badge l" id="cntL">0</span>
+        <span class="badge w" id="cntW">0</span>
+        <span class="badge e" id="cntE">0</span>
+        <button onclick="clearCon()">🗑</button>
+        <button onclick="$('conPanel').classList.add('hidden')">✕</button>
+      </div>
+      <div class="con-body" id="conBody"></div><div class="con-inp"><span>›</span><input id="conInp" placeholder="执行JS..."></div>
+    </div><div class="pv-tools">
+      <button onclick="runPreview()">▶ 刷新预览</button>
+      <button onclick="$('conPanel').classList.toggle('hidden')">📟 控制台</button>
+      <button onclick="sendErrsToAI()" class="fix" id="fixBtn" style="display:none">🔧 AI修复</button>
+    </div>
+  </div>
+</div>
+
+<div class="nav" id="nav">
+  <button class="active" onclick="showPanel(0)"><span class="ico">💬</span>聊天</button>
+  <button onclick="showPanel(1)"><span class="ico">📝</span>编辑</button>
+  <button onclick="showPanel(2)"><span class="ico">👁</span>预览</button>
+</div>
+
+<script>
+// ===== IndexedDB 存储 =====
+const DB_NAME='ai_coder',DB_VER=1;
+let db;
+function openDB(){
+  return new Promise((res,rej)=>{
+    const r=indexedDB.open(DB_NAME,DB_VER);
+    r.onupgradeneeded=e=>{const d=e.target.result;if(!d.objectStoreNames.contains('kv'))d.createObjectStore('kv')};
+    r.onsuccess=e=>{db=e.target.result;res(db)};
+    r.onerror=e=>rej(e);
+  });
+}
+function dbPut(key,val){return new Promise((res,rej)=>{const tx=db.transaction('kv','readwrite');tx.objectStore('kv').put(val,key);tx.oncomplete=()=>res();tx.onerror=e=>rej(e)})}
+function dbGet(key){return new Promise((res,rej)=>{const tx=db.transaction('kv','readonly');const r=tx.objectStore('kv').get(key);r.onsuccess=()=>res(r.result);r.onerror=e=>rej(e)})}
+
+async function saveAll(){
+  F[cur]=$('ed').value;
+  await dbPut('files',JSON.parse(JSON.stringify(F)));
+  await dbPut('currentFile',cur);
+  await dbPut('config',{model:$('model').value,key:$('key').value,base:$('base').value});await dbPut('chatHistory',hist);
+}
+async function loadAll(){
+  const files=await dbGet('files');
+  const cf=await dbGet('currentFile');
+  const cfg=await dbGet('config');
+  const ch=await dbGet('chatHistory');
+  if(files){Object.keys(F).forEach(k=>{if(!files[k])delete F[k]});Object.assign(F,files)}
+  if(cf&&F[cf])cur=cf;
+  if(cfg){$('model').value=cfg.model||'';$('key').value=cfg.key||'';$('base').value=cfg.base||''}
+  if(ch)hist=ch;
+}
+// 自动保存
+let saveTimer;
+function autoSave(){clearTimeout(saveTimer);saveTimer=setTimeout(()=>saveAll(),1000)}
+
+// ===== 核心状态 =====
+const F={'index.html':'<!DOCTYPE html>\n<html>\n<head>\n  <meta charset="UTF-8">\n  <title>My App</title>\n  <style>\n    body { font-family: sans-serif; padding: 20px; }\n  </style>\n</head>\n<body>\n  <h1>Hello World</h1>\n  <script>\n    console.log("页面已加载");\n  <\/script>\n</body>\n</html>'};
+let cur='index.html',hist=[],conLogs=[],cnts={log:0,warn:0,error:0},errLines=new Set(),undoStack={};
+const $=id=>document.getElementById(id);
+
+// ===== API 测试 =====
+async function testAPI(){
+  const tr=$('testResult');
+  const key=$('key').value.trim(),base=$('base').value.trim(),model=$('model').value.trim();
+  if(!key||!base||!model){tr.className='test-result fail';tr.textContent='❌ 请填写完整的模型名、Key和URL';return}
+  tr.className='test-result loading';tr.textContent='⏳ 测试中...';
+  try{
+    const res=await fetch(`${base}/chat/completions`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':`Bearer ${key}`},
+      body:JSON.stringify({model,messages:[{role:'user',content:'Hi'}],max_tokens:1})
+    });
+    const data=await res.json();
+    if(data.choices){tr.className='test-result ok';tr.textContent=`✅ 连接成功！模型: ${data.model||model}`}
+    else{tr.className='test-result fail';tr.textContent=`❌ ${data.error?.message||JSON.stringify(data).slice(0,100)}`}
+  }catch(e){tr.className='test-result fail';tr.textContent=`❌ 连接失败: ${e.message}`}
+}
+
+function saveCfg(){$('cfgModal').classList.remove('show');autoSave()}
+
+// ===== 面板切换 =====
+const panels=[$('panelChat'),$('panelEdit'),$('panelPreview')];
+const navBtns=[...$('nav').children];
+function showPanel(i){panels.forEach((p,j)=>p.classList.toggle('active',i===j));navBtns.forEach((b,j)=>b.classList.toggle('active',i===j));if(i===2)runPreview()}
+
+// ===== 文件导入 =====
+function importFiles(){$('fileInput').click()}
+$('fileInput').addEventListener('change',e=>{
+  [...e.target.files].forEach(file=>{
+    const reader=new FileReader();
+    reader.onload=ev=>{F[file.name]=ev.target.result;sw(file.name);autoSave()};
+    reader.readAsText(file);
+  });e.target.value='';
+});
+
+// ===== 行号 =====
+function updLn(){
+  const lines=$('ed').value.split('\n').length;
+  $('ln').innerHTML=Array.from({length:lines},(_,i)=>{const n=i+1,e=errLines.has(n);return`<div class="ln${e?' err':''}" ${e?`onclick="gotoLn(${n})"`:``}>${n}</div>`}).join('');
+}
+function gotoLn(n){showPanel(1);setTimeout(()=>{const ed=$('ed'),lines=ed.value.split('\n');let pos=0;for(let i=0;i<n-1&&i<lines.length;i++)pos+=lines[i].length+1;ed.focus();ed.setSelectionRange(pos,pos+(lines[n-1]?.length||0))},100)}
+$('ed').addEventListener('input',()=>{
+  pushUndo();
+  updLn();
+  autoSave()
+});
+$('ed').addEventListener('scroll',()=>{$('ln').scrollTop=$('ed').scrollTop});
+$('ed').addEventListener('keydown',e=>{if(e.key==='Tab'){e.preventDefault();const s=e.target,p=s.selectionStart;s.value=s.value.slice(0,p)+'  '+s.value.slice(s.selectionEnd);s.selectionStart=s.selectionEnd=p+2}});
+
+// ===== 文件tab =====
+function renderTabs(){$('tabsWrap').innerHTML=Object.keys(F).map(f=>`<button class="ftab ${f===cur?'active':''}" onclick="sw('${f}')">${f}</button>`).join('')}
+function sw(f){F[cur]=$('ed').value;cur=f;$('ed').value=F[f]||'';renderTabs();updLn();autoSave()}
+function addF(){const n=prompt('文件名：');if(n&&!F[n]){F[n]='';sw(n)}}
+function dl(){F[cur]=$('ed').value;const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([F[cur]]));a.download=cur;a.click()}
+function delF(){
+  if(!cur || !confirm(`确定删除 ${cur}？`)) return;
+  
+  delete F[cur];
+  
+  const files = Object.keys(F);
+  if (files.length > 0) {
+    sw(files[0]);
+  } else {
+    cur = null;
+    $('ed').value = '';
+    renderTabs();
+    updLn();
+  }
+}
+function pushUndo(){
+    if(!undoStack[cur]) undoStack[cur] = [];
+    const currentCode = $('ed').value;
+    const lastUndo = undoStack[cur][undoStack[cur].length - 1];
+    if(lastUndo !== currentCode) {
+        undoStack[cur].push(currentCode);
+        if(undoStack[cur].length > 50) undoStack[cur].shift();
+    }
+}
+function undo(){
+    if(!undoStack[cur] || undoStack[cur].length <= 1) {
+        alert("没有更多可撤销的操作了");
+        return;
+    }
+    undoStack[cur].pop();
+    const lastState = undoStack[cur][undoStack[cur].length - 1];
+    $('ed').value = lastState;
+    F[cur] = lastState;
+    updLn();
+    autoSave();
+}
+
+// ===== 预览 =====
+function runPreview(){
+  F[cur]=$('ed').value;clearCon();
+  const hook=`<script>(function(){var P=window.parent;function s(t,a,st){var l=st?(st.split('\\n')[1]||'').match(/:(\\d+):(\\d+)/):null;P.postMessage({_c:1,t:t,a:Array.from(a).map(function(x){try{return typeof x==='object'?JSON.stringify(x,null,2):String(x)}catch(e){return String(x)}}),l:l?parseInt(l[1]):null},'*')}['log','warn','error','info'].forEach(function(m){var o=console[m];console[m]=function(){o.apply(console,arguments);s(m,arguments,new Error().stack)}});window.onerror=function(m,u,l){P.postMessage({_c:1,t:'error',a:[m],l:l},'*')};window.addEventListener('unhandledrejection',function(e){s('error',['Promise: '+e.reason],new Error().stack)})})()<\/script>`;
+  let html=F[cur];
+  if(!cur.endsWith('.html')){const hf=Object.keys(F).find(f=>f.endsWith('.html'));if(hf)html=F[hf]}
+  html=html.replace(/<head>/i,'<head>'+hook);
+  $('pv').srcdoc=html;$('conPanel').classList.remove('hidden');
+}
+
+// ===== 控制台 =====
+function clearCon(){conLogs=[];cnts={log:0,warn:0,error:0};errLines.clear();$('conBody').innerHTML='';$('cntL').textContent='0';$('cntW').textContent='0';$('cntE').textContent='0';$('fixBtn').style.display='none';updLn()}
+window.addEventListener('message',e=>{
+  if(!e.data?._c)return;const{t,a,l}=e.data,k=t==='info'?'log':t;
+  cnts[k]=(cnts[k]||0)+1;$('cntL').textContent=cnts.log;$('cntW').textContent=cnts.warn;$('cntE').textContent=cnts.error;
+  if(t==='error'&&l){errLines.add(l);updLn()}
+  if(cnts.error>0)$('fixBtn').style.display='';conLogs.push({t,text:a.join(' '),l});
+  const d=document.createElement('div');d.className=`clog ${t}`;
+  const s=document.createElement('span');s.textContent=a.join(' ');d.appendChild(s);
+  if(l){const loc=document.createElement('span');loc.className='cloc';loc.textContent=`行${l}`;loc.onclick=()=>gotoLn(l);d.appendChild(loc)}
+  $('conBody').appendChild(d);$('conBody').scrollTop=99999;
+});
+$('conInp').addEventListener('keydown',e=>{
+  if(e.key!=='Enter')return;const c=e.target.value.trim();if(!c)return;e.target.value='';
+  const pv=$('pv');if(pv.contentWindow){try{const r=pv.contentWindow.eval(c);addCL('log',`› ${c}\n${r}`)}catch(er){addCL('error',`› ${c}\n${er.message}`)}}
+});
+function addCL(t,txt){const d=document.createElement('div');d.className=`clog ${t}`;d.textContent=txt;$('conBody').appendChild(d);$('conBody').scrollTop=99999}
+function sendErrsToAI(){const errs=conLogs.filter(l=>l.t==='error');if(!errs.length)return;$('inp').value='控制台错误，请修复：\n'+errs.map(e=>`[行${e.l||'?'}] ${e.text}`).join('\n');showPanel(0);setTimeout(()=>send(),200)}
+
+// ===== AI =====
+function parseEdits(t){const e=[];const r=/<<<<<<< SEARCH\n([\s\S]*?)\n=======\n([\s\S]*?)\n>>>>>>> REPLACE/g;let m;while((m=r.exec(t))!==null)e.push({s:m[1],r:m[2]});return e}
+function applyEdits(edits,btn){
+  pushUndo();
+  F[cur]=$('ed').value;
+  let code=F[cur];
+  let ok=0, fail=[];
+  
+  const normalize = str => str.replace(/\r\n/g, '\n').trim();
+
+  for(const e of edits){
+    const normS = normalize(e.s);
+    const normCode = normalize(code);
+    
+    if(normCode.includes(normS)){
+      const start = normCode.indexOf(normS);
+      const end = start + normS.length;
+      
+      const originalPiece = code.substring(start, end);
+      code = code.substring(0, start) + e.r + code.substring(end);
+      ok++;
+    } else {
+      fail.push(e.s.slice(0, 40) + '...');
+    }
+  }
+
+  F[cur]=code;
+  $('ed').value=code;
+  updLn();
+  autoSave();
+  btn.textContent=fail.length?`⚠️ ${ok}/${edits.length} (部分失败)`:`✅ ${ok}处已应用`;
+  btn.classList.add('applied');
+  btn.disabled=true;
+  if(fail.length) alert('部分代码块无法匹配，请检查AI返回的格式是否正确:\n' + fail.join('\n'));
+}
+function addMsg(role,content){
+  const d=document.createElement('div');d.className=`msg ${role}`;
+  const s=document.createElement('span');s.textContent=content;d.appendChild(s);
+  if(role==='ai'){
+    const edits=parseEdits(content);
+    if(edits.length){const b=document.createElement('button');b.className='abtn';b.textContent=`🔧 应用${edits.length}处修改`;b.onclick=()=>applyEdits(edits,b);d.appendChild(b)}
+    const cb=[...content.matchAll(/```[\w]*\n([\s\S]*?)```/g)];
+    if(!edits.length&&cb.length){const b=document.createElement('button');b.className='abtn';b.textContent='📋 替换文件';b.onclick=()=>{pushUndo(); F[cur]=cb.map(m=>m[1].trim()).join('\n\n');$('ed').value=F[cur];updLn();autoSave();b.textContent='✅ 已替换';b.classList.add('applied');b.disabled=true};d.appendChild(b)}
+  }
+  $('msgs').appendChild(d);$('msgs').scrollTop=99999;
+}
+const SYS = `你是专业的前端编程助手，请严格按照 SEARCH/REPLACE 格式进行增量代码编辑。请务必不要输出‘’之类的乱码字符。
+
+# 指令格式
+
+\`\`\`
+<<<<<<< SEARCH
+// 要查找的原始代码
+=======
+// 替换后的新代码
+>>>>>>> REPLACE
+\`\`\`
+
+# 核心规则
+1.  **精确匹配**: \`SEARCH\` 块中的代码必须与文件中的代码 **一模一样**，包括空格、换行和缩进。
+2.  **最小上下文**: 只包含必要的上下文，让 \`SEARCH\` 块尽可能短，但要保证其在文件中的唯一性。
+3.  **多点修改**: 如果需要修改多个地方，请使用多个 \`SEARCH/REPLACE\` 块。
+4.  **完整代码块**: 当创建新文件或AI认为覆盖整个文件更安全时，可以直接提供完整的代码块，并用 \\\`\\\`\\\` 包裹。
+
+# 故障排查
+如果遇到控制台错误，请仔细分析错误信息，并生成修复补丁。如果补丁格式不正确或无法匹配，我将无法应用它。`;
+
+function newChat(){
+  if(hist.length && !confirm('开启新对话？当前对话历史将清空。'))return;
+  hist=[];
+  $('msgs').innerHTML='';
+  autoSave();
+}
+
+async function send(){
+  const msg=$('inp').value.trim();if(!msg)return;
+  const key=$('key').value.trim(),base=$('base').value.trim(),model=$('model').value.trim();
+  if(!key||!base||!model){$('cfgModal').classList.add('show');return}
+  $('inp').value='';addMsg('user',msg);
+  F[cur]=$('ed').value;
+  hist.push({role:'user',content:msg});
+  autoSave();
+
+  // 始终把完整代码放进 system，最近10条对话作为上下文
+  const sys=SYS+`\n\n当前文件:${cur}\n完整代码:\n\`\`\`\n${F[cur]}\n\`\`\``;
+  const recentHist=hist.slice(-10);
+
+  $('btn').disabled=true;
+  try{
+    const res=await fetch(`${base}/chat/completions`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':`Bearer ${key}`},
+      body:JSON.stringify({model,messages:[{role:'system',content:sys},...recentHist],temperature:0.6,stream: false})
+    });
+    
+    const data=await res.json();
+    const reply=data.choices?.[0]?.message?.content||JSON.stringify(data).slice(0,200);
+    hist.push({role:'assistant',content:reply});
+    addMsg('ai',reply);autoSave();
+  }catch(e){addMsg('ai','出错:'+e.message)}
+  $('btn').disabled=false;
+}
+
+$('inp').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()}});
+
+// ===== 初始化：从 IndexedDB 加载 =====
+(async()=>{
+  await openDB();
+  await loadAll();
+  renderTabs();
+  $('ed').value=F[cur];
+  updLn();
+  // 恢复聊天记录到界面
+  hist.forEach(h=>{
+    if(h.role==='user')addMsg('user',h.content);
+    else if(h.role==='assistant')addMsg('ai',h.content);
+  });
+})();
+</script>
+</body>
+</html>
