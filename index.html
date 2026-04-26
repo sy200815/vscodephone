@@ -172,7 +172,7 @@ function dbPut(key,val){return new Promise((res,rej)=>{const tx=db.transaction('
 function dbGet(key){return new Promise((res,rej)=>{const tx=db.transaction('kv','readonly');const r=tx.objectStore('kv').get(key);r.onsuccess=()=>res(r.result);r.onerror=e=>rej(e)})}
 
 async function saveAll(){
-  F[cur]=$('ed').value;
+  if(cur)F[cur]=$('ed').value;
   await dbPut('files',JSON.parse(JSON.stringify(F)));
   await dbPut('currentFile',cur);
   await dbPut('config',{model:$('model').value,key:$('key').value,base:$('base').value});await dbPut('chatHistory',hist);
@@ -247,22 +247,23 @@ $('ed').addEventListener('keydown',e=>{if(e.key==='Tab'){e.preventDefault();cons
 
 // ===== 文件tab =====
 function renderTabs(){$('tabsWrap').innerHTML=Object.keys(F).map(f=>`<button class="ftab ${f===cur?'active':''}" onclick="sw('${f}')">${f}</button>`).join('')}
-function sw(f){F[cur]=$('ed').value;cur=f;$('ed').value=F[f]||'';renderTabs();updLn();autoSave()}
+function sw(f){if(cur)F[cur]=$('ed').value;cur=f;$('ed').value=F[f]||'';renderTabs();updLn();autoSave()}
 function addF(){const n=prompt('文件名：');if(n&&!F[n]){F[n]='';sw(n)}}
-function dl(){F[cur]=$('ed').value;const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([F[cur]]));a.download=cur;a.click()}
+function dl(){if(cur)F[cur]=$('ed').value;const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([F[cur]||'']));a.download=cur;a.click()}
 function delF(){
   if(!cur || !confirm(`确定删除 ${cur}？`)) return;
   
   delete F[cur];
+  cur = null; // 切断引用，防止 sw 函数复活该文件
   
   const files = Object.keys(F);
   if (files.length > 0) {
     sw(files[0]);
   } else {
-    cur = null;
     $('ed').value = '';
     renderTabs();
     updLn();
+    autoSave();
   }
 }
 function pushUndo(){
@@ -289,7 +290,7 @@ function undo(){
 
 // ===== 预览 =====
 function runPreview(){
-  F[cur]=$('ed').value;clearCon();
+  if(cur)F[cur]=$('ed').value;clearCon();
   const hook=`<script>(function(){var P=window.parent;function s(t,a,st){var l=st?(st.split('\\n')[1]||'').match(/:(\\d+):(\\d+)/):null;P.postMessage({_c:1,t:t,a:Array.from(a).map(function(x){try{return typeof x==='object'?JSON.stringify(x,null,2):String(x)}catch(e){return String(x)}}),l:l?parseInt(l[1]):null},'*')}['log','warn','error','info'].forEach(function(m){var o=console[m];console[m]=function(){o.apply(console,arguments);s(m,arguments,new Error().stack)}});window.onerror=function(m,u,l){P.postMessage({_c:1,t:'error',a:[m],l:l},'*')};window.addEventListener('unhandledrejection',function(e){s('error',['Promise: '+e.reason],new Error().stack)})})()<\/script>`;
   let html=F[cur];
   if(!cur.endsWith('.html')){const hf=Object.keys(F).find(f=>f.endsWith('.html'));if(hf)html=F[hf]}
@@ -319,23 +320,85 @@ function sendErrsToAI(){const errs=conLogs.filter(l=>l.t==='error');if(!errs.len
 // ===== AI =====
 function parseEdits(t){const e=[];const r=/<<<<<<< SEARCH\n([\s\S]*?)\n=======\n([\s\S]*?)\n>>>>>>> REPLACE/g;let m;while((m=r.exec(t))!==null)e.push({s:m[1],r:m[2]});return e}
 function applyEdits(edits,btn){
+  if(!cur)return;
   pushUndo();
   F[cur]=$('ed').value;
   let code=F[cur];
   let ok=0, fail=[];
-  
-  const normalize = str => str.replace(/\r\n/g, '\n').trim();
 
   for(const e of edits){
-    const normS = normalize(e.s);
-    const normCode = normalize(code);
+    let searchStr = e.s.replace(/\r\n/g, '\n');
+    let replaceStr = e.r.replace(/\r\n/g, '\n');
+    let currentCode = code.replace(/\r\n/g, '\n');
     
-    if(normCode.includes(normS)){
-      const start = normCode.indexOf(normS);
-      const end = start + normS.length;
+    // 1. 尝试精确匹配
+    let idx = currentCode.indexOf(searchStr);
+    
+    // 2. 尝试去除首尾空白后匹配
+    if (idx === -1) {
+      const trimmedSearch = searchStr.trim();
+      if (trimmedSearch) {
+        idx = currentCode.indexOf(trimmedSearch);
+        if (idx !== -1) searchStr = trimmedSearch;
+      }
+    }
+    
+    // 3. 终极容错：基于非空白字符(Token)的模糊匹配
+    if (idx === -1) {
+      const getNonSpaceTokens = str => {
+        const tokens = [];
+        const regex = /\S+/g;
+        let match;
+        while ((match = regex.exec(str)) !== null) {
+          tokens.push({ text: match[0], start: match.index, end: match.index + match[0].length });
+        }
+        return tokens;
+      };
       
-      const originalPiece = code.substring(start, end);
-      code = code.substring(0, start) + e.r + code.substring(end);
+      const codeTokens = getNonSpaceTokens(currentCode);
+      const searchTokens = getNonSpaceTokens(searchStr);
+      
+      if (searchTokens.length > 0) {
+        let matchStartIdx = -1;
+        let matchEndIdx = -1;
+        
+        for (let i = 0; i <= codeTokens.length - searchTokens.length; i++) {
+          let match = true;
+          for (let j = 0; j < searchTokens.length; j++) {
+             if (codeTokens[i + j].text !== searchTokens[j].text) {
+                 match = false; break;
+             }
+          }
+          if (match) {
+             matchStartIdx = codeTokens[i].start;
+             matchEndIdx = codeTokens[i + searchTokens.length - 1].end;
+             
+             // 智能扩展边界到行首，避免破坏原有的缩进结构
+             let lineStart = matchStartIdx;
+             while(lineStart > 0 && /[ \t]/.test(currentCode[lineStart - 1])) lineStart--;
+             if (lineStart === 0 || currentCode[lineStart - 1] === '\n') matchStartIdx = lineStart;
+             
+             // 智能扩展边界到行尾
+             let lineEnd = matchEndIdx;
+             while(lineEnd < currentCode.length && /[ \t]/.test(currentCode[lineEnd])) lineEnd++;
+             if (lineEnd === currentCode.length || currentCode[lineEnd] === '\n') matchEndIdx = lineEnd;
+             
+             break;
+          }
+        }
+        
+        if (matchStartIdx !== -1) {
+          const before = currentCode.substring(0, matchStartIdx);
+          const after = currentCode.substring(matchEndIdx);
+          code = before + replaceStr + after;
+          ok++;
+          continue;
+        }
+      }
+    }
+    
+    if (idx !== -1) {
+      code = currentCode.substring(0, idx) + replaceStr + currentCode.substring(idx + searchStr.length);
       ok++;
     } else {
       fail.push(e.s.slice(0, 40) + '...');
@@ -358,7 +421,7 @@ function addMsg(role,content){
     const edits=parseEdits(content);
     if(edits.length){const b=document.createElement('button');b.className='abtn';b.textContent=`🔧 应用${edits.length}处修改`;b.onclick=()=>applyEdits(edits,b);d.appendChild(b)}
     const cb=[...content.matchAll(/```[\w]*\n([\s\S]*?)```/g)];
-    if(!edits.length&&cb.length){const b=document.createElement('button');b.className='abtn';b.textContent='📋 替换文件';b.onclick=()=>{pushUndo(); F[cur]=cb.map(m=>m[1].trim()).join('\n\n');$('ed').value=F[cur];updLn();autoSave();b.textContent='✅ 已替换';b.classList.add('applied');b.disabled=true};d.appendChild(b)}
+        if(!edits.length&&cb.length){const b=document.createElement('button');b.className='abtn';b.textContent='📋 替换文件';b.onclick=()=>{if(!cur)return;pushUndo(); F[cur]=cb.map(m=>m[1].trim()).join('\n\n');$('ed').value=F[cur];updLn();autoSave();b.textContent='✅ 已替换';b.classList.add('applied');b.disabled=true};d.appendChild(b)}
   }
   $('msgs').appendChild(d);$('msgs').scrollTop=99999;
 }
@@ -394,13 +457,13 @@ async function send(){
   const msg=$('inp').value.trim();if(!msg)return;
   const key=$('key').value.trim(),base=$('base').value.trim(),model=$('model').value.trim();
   if(!key||!base||!model){$('cfgModal').classList.add('show');return}
-  $('inp').value='';addMsg('user',msg);
-  F[cur]=$('ed').value;
+    $('inp').value='';addMsg('user',msg);
+  if(cur)F[cur]=$('ed').value;
   hist.push({role:'user',content:msg});
   autoSave();
 
   // 始终把完整代码放进 system，最近10条对话作为上下文
-  const sys=SYS+`\n\n当前文件:${cur}\n完整代码:\n\`\`\`\n${F[cur]}\n\`\`\``;
+  const sys=SYS+(cur?`\n\n当前文件:${cur}\n完整代码:\n\`\`\`\n${F[cur]}\n\`\`\``:'\n\n(当前无打开的文件)');
   const recentHist=hist.slice(-10);
 
   $('btn').disabled=true;
