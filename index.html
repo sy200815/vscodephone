@@ -109,7 +109,13 @@ body{font-family:var(--font);height:100vh;height:100dvh;background:var(--bg);col
 <div class="body">
   <div class="panel p-chat active" id="panelChat">
     <div class="msgs" id="msgs"></div>
+    <div id="imgPreviewWrap" style="display:none;padding:6px 10px;background:var(--bg2);border-top:1px solid var(--bg3);align-items:center;gap:8px;position:relative">
+      <img id="imgPreview" src="" style="height:40px;border-radius:4px;object-fit:cover;border:1px solid var(--bg4)">
+      <button onclick="clearImg()" style="background:var(--red);color:var(--bg);border:none;border-radius:50%;width:16px;height:16px;font-size:10px;cursor:pointer;position:absolute;top:2px;left:42px;display:flex;align-items:center;justify-content:center;font-weight:bold">×</button>
+    </div>
     <div class="iarea">
+      <button onclick="$('imgInput').click()" style="background:var(--bg3);color:var(--fg2);border:1px solid var(--bg4);padding:0 10px;border-radius:6px;cursor:pointer;font-size:16px">📷</button>
+      <input type="file" id="imgInput" accept="image/*" style="display:none" onchange="previewImg(this)">
       <textarea id="inp" placeholder="描述需求..." rows="2"></textarea>
       <button id="btn" onclick="send()">发送</button>
     </div>
@@ -319,86 +325,113 @@ function sendErrsToAI(){const errs=conLogs.filter(l=>l.t==='error');if(!errs.len
 
 // ===== AI =====
 function parseEdits(t){const e=[];const r=/<<<<<<< SEARCH\n([\s\S]*?)\n=======\n([\s\S]*?)\n>>>>>>> REPLACE/g;let m;while((m=r.exec(t))!==null)e.push({s:m[1],r:m[2]});return e}
+// 多级容错定位：返回 {start,end} 字符区间，找不到返回 null
+function locateMatch(code, search){
+  // ---- 0. 预处理 ----
+  if(search==='') return null;
+
+  // ---- 1. 精确匹配 ----
+  let idx = code.indexOf(search);
+  if(idx !== -1) return {start: idx, end: idx + search.length};
+
+  // ---- 2. 去首尾空白后精确匹配 ----
+  const trimmed = search.trim();
+  if(trimmed){
+    idx = code.indexOf(trimmed);
+    if(idx !== -1) return {start: idx, end: idx + trimmed.length};
+  }
+
+  // ---- 准备按行索引 ----
+  const codeLines = code.split('\n');
+  const offsets = []; // 每行起始字符下标
+  let p = 0;
+  for(const l of codeLines){ offsets.push(p); p += l.length + 1; }
+  const rangeOf = (a, b) => ({ start: offsets[a], end: offsets[b] + codeLines[b].length });
+
+  // 规范化：折叠所有空白为单个空格并去首尾
+  const norm = s => s.replace(/\s+/g, ' ').trim();
+
+  // search 去掉首尾空行
+  let sLines = search.split('\n');
+  while(sLines.length && sLines[0].trim() === '') sLines.shift();
+  while(sLines.length && sLines[sLines.length - 1].trim() === '') sLines.pop();
+  if(!sLines.length) return null;
+
+  const nSearch = sLines.map(norm);
+  const nCode = codeLines.map(norm);
+  const N = nSearch.length;
+
+  // 相似度：基于 token 的 Dice 系数（0~1）
+  const sim = (a, b) => {
+    if(a === b) return 1;
+    if(!a && !b) return 1;
+    if(!a || !b) return 0;
+    const ta = a.split(' ').filter(Boolean), tb = b.split(' ').filter(Boolean);
+    if(!ta.length && !tb.length) return 1;
+    const setB = {}; tb.forEach(t => setB[t] = (setB[t] || 0) + 1);
+    let inter = 0;
+    for(const t of ta){ if(setB[t] > 0){ inter++; setB[t]--; } }
+    return (2 * inter) / (ta.length + tb.length);
+  };
+
+  if(N <= nCode.length){
+    // ---- 3. 按行规范化后整块精确匹配 ----
+    for(let i = 0; i <= nCode.length - N; i++){
+      let hit = true;
+      for(let j = 0; j < N; j++){ if(nCode[i + j] !== nSearch[j]){ hit = false; break; } }
+      if(hit) return rangeOf(i, i + N - 1);
+    }
+
+    // ---- 4. 按行相似度模糊匹配（取整块平均相似度最高者）----
+    let best = -1, bestScore = 0;
+    for(let i = 0; i <= nCode.length - N; i++){
+      let sc = 0;
+      for(let j = 0; j < N; j++) sc += sim(nCode[i + j], nSearch[j]);
+      sc /= N;
+      if(sc > bestScore){ bestScore = sc; best = i; }
+    }
+    if(best !== -1 && bestScore >= 0.7) return rangeOf(best, best + N - 1);
+  }
+
+  // ---- 5. 首尾行锚点匹配（中间内容差异较大时）----
+  if(N >= 2){
+    const firstA = nSearch[0], lastA = nSearch[N - 1];
+    const matchLine = (line, anchor) => line === anchor || sim(line, anchor) >= 0.8;
+    for(let i = 0; i < nCode.length; i++){
+      if(matchLine(nCode[i], firstA)){
+        for(let k = i + 1; k < nCode.length; k++){
+          if(matchLine(nCode[k], lastA)) return rangeOf(i, k);
+        }
+      }
+    }
+  }
+
+  // ---- 6. 单行模糊匹配兜底 ----
+  if(N === 1){
+    let bi = -1, bs = 0;
+    for(let i = 0; i < nCode.length; i++){
+      const s = sim(nCode[i], nSearch[0]);
+      if(s > bs){ bs = s; bi = i; }
+    }
+    if(bi !== -1 && bs >= 0.6) return rangeOf(bi, bi);
+  }
+
+  return null;
+}
+
 function applyEdits(edits,btn){
   if(!cur)return;
   pushUndo();
   F[cur]=$('ed').value;
-  let code=F[cur];
+  let code=F[cur].replace(/\r\n/g, '\n');
   let ok=0, fail=[];
 
   for(const e of edits){
-    let searchStr = e.s.replace(/\r\n/g, '\n');
-    let replaceStr = e.r.replace(/\r\n/g, '\n');
-    let currentCode = code.replace(/\r\n/g, '\n');
-    
-    // 1. 尝试精确匹配
-    let idx = currentCode.indexOf(searchStr);
-    
-    // 2. 尝试去除首尾空白后匹配
-    if (idx === -1) {
-      const trimmedSearch = searchStr.trim();
-      if (trimmedSearch) {
-        idx = currentCode.indexOf(trimmedSearch);
-        if (idx !== -1) searchStr = trimmedSearch;
-      }
-    }
-    
-    // 3. 终极容错：基于非空白字符(Token)的模糊匹配
-    if (idx === -1) {
-      const getNonSpaceTokens = str => {
-        const tokens = [];
-        const regex = /\S+/g;
-        let match;
-        while ((match = regex.exec(str)) !== null) {
-          tokens.push({ text: match[0], start: match.index, end: match.index + match[0].length });
-        }
-        return tokens;
-      };
-      
-      const codeTokens = getNonSpaceTokens(currentCode);
-      const searchTokens = getNonSpaceTokens(searchStr);
-      
-      if (searchTokens.length > 0) {
-        let matchStartIdx = -1;
-        let matchEndIdx = -1;
-        
-        for (let i = 0; i <= codeTokens.length - searchTokens.length; i++) {
-          let match = true;
-          for (let j = 0; j < searchTokens.length; j++) {
-             if (codeTokens[i + j].text !== searchTokens[j].text) {
-                 match = false; break;
-             }
-          }
-          if (match) {
-             matchStartIdx = codeTokens[i].start;
-             matchEndIdx = codeTokens[i + searchTokens.length - 1].end;
-             
-             // 智能扩展边界到行首，避免破坏原有的缩进结构
-             let lineStart = matchStartIdx;
-             while(lineStart > 0 && /[ \t]/.test(currentCode[lineStart - 1])) lineStart--;
-             if (lineStart === 0 || currentCode[lineStart - 1] === '\n') matchStartIdx = lineStart;
-             
-             // 智能扩展边界到行尾
-             let lineEnd = matchEndIdx;
-             while(lineEnd < currentCode.length && /[ \t]/.test(currentCode[lineEnd])) lineEnd++;
-             if (lineEnd === currentCode.length || currentCode[lineEnd] === '\n') matchEndIdx = lineEnd;
-             
-             break;
-          }
-        }
-        
-        if (matchStartIdx !== -1) {
-          const before = currentCode.substring(0, matchStartIdx);
-          const after = currentCode.substring(matchEndIdx);
-          code = before + replaceStr + after;
-          ok++;
-          continue;
-        }
-      }
-    }
-    
-    if (idx !== -1) {
-      code = currentCode.substring(0, idx) + replaceStr + currentCode.substring(idx + searchStr.length);
+    const searchStr = e.s.replace(/\r\n/g, '\n');
+    const replaceStr = e.r.replace(/\r\n/g, '\n');
+    const m = locateMatch(code, searchStr);
+    if(m){
+      code = code.slice(0, m.start) + replaceStr + code.slice(m.end);
       ok++;
     } else {
       fail.push(e.s.slice(0, 40) + '...');
@@ -416,11 +449,40 @@ function applyEdits(edits,btn){
 }
 function addMsg(role,content){
   const d=document.createElement('div');d.className=`msg ${role}`;
-  const s=document.createElement('span');s.textContent=content;d.appendChild(s);
+  
+  let text = '';
+  let imgUrl = '';
+  if (Array.isArray(content)) {
+    content.forEach(item => {
+      if (item.type === 'text') text = item.text;
+      if (item.type === 'image_url') imgUrl = item.image_url.url || item.image_url;
+    });
+  } else {
+    text = content;
+  }
+
+  if (imgUrl) {
+    const img = document.createElement('img');
+    img.src = imgUrl;
+    img.style.maxWidth = '100%';
+    img.style.maxHeight = '200px';
+    img.style.borderRadius = '6px';
+    img.style.display = 'block';
+    img.style.marginBottom = '6px';
+    img.style.cursor = 'pointer';
+    img.onclick = () => {
+      const w = window.open();
+      w.document.write(`<img src="${imgUrl}" style="max-width:100%">`);
+    };
+    d.appendChild(img);
+  }
+
+  const s=document.createElement('span');s.textContent=text;d.appendChild(s);
+  
   if(role==='ai'){
-    const edits=parseEdits(content);
+    const edits=parseEdits(text);
     if(edits.length){const b=document.createElement('button');b.className='abtn';b.textContent=`🔧 应用${edits.length}处修改`;b.onclick=()=>applyEdits(edits,b);d.appendChild(b)}
-    const cb=[...content.matchAll(/```[\w]*\n([\s\S]*?)```/g)];
+    const cb=[...text.matchAll(/```[\w]*\n([\s\S]*?)```/g)];
         if(!edits.length&&cb.length){const b=document.createElement('button');b.className='abtn';b.textContent='📋 替换文件';b.onclick=()=>{if(!cur)return;pushUndo(); F[cur]=cb.map(m=>m[1].trim()).join('\n\n');$('ed').value=F[cur];updLn();autoSave();b.textContent='✅ 已替换';b.classList.add('applied');b.disabled=true};d.appendChild(b)}
   }
   $('msgs').appendChild(d);$('msgs').scrollTop=99999;
@@ -453,13 +515,46 @@ function newChat(){
   autoSave();
 }
 
+let pendingImgBase64 = null;
+function previewImg(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    pendingImgBase64 = e.target.result;
+    $('imgPreview').src = pendingImgBase64;
+    $('imgPreviewWrap').style.display = 'flex';
+  };
+  reader.readAsDataURL(file);
+}
+function clearImg() {
+  pendingImgBase64 = null;
+  $('imgInput').value = '';
+  $('imgPreview').src = '';
+  $('imgPreviewWrap').style.display = 'none';
+}
+
 async function send(){
-  const msg=$('inp').value.trim();if(!msg)return;
+  const msg=$('inp').value.trim();
+  if(!msg && !pendingImgBase64) return;
   const key=$('key').value.trim(),base=$('base').value.trim(),model=$('model').value.trim();
   if(!key||!base||!model){$('cfgModal').classList.add('show');return}
-    $('inp').value='';addMsg('user',msg);
+  
+  let userContent = msg;
+  if(pendingImgBase64) {
+    userContent = [
+      { type: 'text', text: msg || '请分析这张图片。' },
+      { type: 'image_url', image_url: { url: pendingImgBase64 } }
+    ];
+  }
+
+  $('inp').value='';
+  const tempImg = pendingImgBase64;
+  clearImg();
+  
+  addMsg('user', userContent);
   if(cur)F[cur]=$('ed').value;
-  hist.push({role:'user',content:msg});
+  hist.push({role:'user',content:userContent});
   autoSave();
 
   // 始终把完整代码放进 system，最近10条对话作为上下文
@@ -471,7 +566,7 @@ async function send(){
     const res=await fetch(`${base}/chat/completions`,{
       method:'POST',
       headers:{'Content-Type':'application/json','Authorization':`Bearer ${key}`},
-      body:JSON.stringify({model,messages:[{role:'system',content:sys},...recentHist],temperature:0.6,stream: false})
+      body:JSON.stringify({model,messages:[{role:'system',content:sys},...recentHist],temperature:1,stream: false})
     });
     
     const data=await res.json();
