@@ -243,17 +243,21 @@ function updLn(){
   $('ln').innerHTML=Array.from({length:lines},(_,i)=>{const n=i+1,e=errLines.has(n);return`<div class="ln${e?' err':''}" ${e?`onclick="gotoLn(${n})"`:``}>${n}</div>`}).join('');
 }
 function gotoLn(n){showPanel(1);setTimeout(()=>{const ed=$('ed'),lines=ed.value.split('\n');let pos=0;for(let i=0;i<n-1&&i<lines.length;i++)pos+=lines[i].length+1;ed.focus();ed.setSelectionRange(pos,pos+(lines[n-1]?.length||0))},100)}
+let inputTimer;
 $('ed').addEventListener('input',()=>{
-  pushUndo();
+  clearTimeout(inputTimer);
+  inputTimer = setTimeout(()=>{
+    pushState($('ed').value);
+    autoSave();
+  },300);
   updLn();
-  autoSave()
 });
 $('ed').addEventListener('scroll',()=>{$('ln').scrollTop=$('ed').scrollTop});
 $('ed').addEventListener('keydown',e=>{if(e.key==='Tab'){e.preventDefault();const s=e.target,p=s.selectionStart;s.value=s.value.slice(0,p)+'  '+s.value.slice(s.selectionEnd);s.selectionStart=s.selectionEnd=p+2}});
 
 // ===== 文件tab =====
 function renderTabs(){$('tabsWrap').innerHTML=Object.keys(F).map(f=>`<button class="ftab ${f===cur?'active':''}" onclick="sw('${f}')">${f}</button>`).join('')}
-function sw(f){if(cur)F[cur]=$('ed').value;cur=f;$('ed').value=F[f]||'';renderTabs();updLn();autoSave()}
+function sw(f){if(cur)F[cur]=$('ed').value;cur=f;$('ed').value=F[f]||'';if(!undoStack[cur])undoStack[cur]=[$('ed').value];renderTabs();updLn();autoSave()}
 function addF(){const n=prompt('文件名：');if(n&&!F[n]){F[n]='';sw(n)}}
 function dl(){if(cur)F[cur]=$('ed').value;const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([F[cur]||'']));a.download=cur;a.click()}
 function delF(){
@@ -272,17 +276,21 @@ function delF(){
     autoSave();
   }
 }
-function pushUndo(){
+function pushState(code){
     if(!undoStack[cur]) undoStack[cur] = [];
-    const currentCode = $('ed').value;
-    const lastUndo = undoStack[cur][undoStack[cur].length - 1];
-    if(lastUndo !== currentCode) {
-        undoStack[cur].push(currentCode);
+    const last = undoStack[cur][undoStack[cur].length - 1];
+    if(last !== code) {
+        undoStack[cur].push(code);
         if(undoStack[cur].length > 50) undoStack[cur].shift();
     }
 }
 function undo(){
-    if(!undoStack[cur] || undoStack[cur].length <= 1) {
+    const code = $('ed').value;
+    if(!undoStack[cur]) undoStack[cur] = [code];
+    if(undoStack[cur][undoStack[cur].length - 1] !== code) {
+        undoStack[cur].push(code);
+    }
+    if(undoStack[cur].length <= 1) {
         alert("没有更多可撤销的操作了");
         return;
     }
@@ -421,7 +429,6 @@ function locateMatch(code, search){
 
 function applyEdits(edits,btn){
   if(!cur)return;
-  pushUndo();
   F[cur]=$('ed').value;
   let code=F[cur].replace(/\r\n/g, '\n');
   let ok=0, fail=[];
@@ -440,6 +447,7 @@ function applyEdits(edits,btn){
 
   F[cur]=code;
   $('ed').value=code;
+  pushState(code);
   updLn();
   autoSave();
   btn.textContent=fail.length?`⚠️ ${ok}/${edits.length} (部分失败)`:`✅ ${ok}处已应用`;
@@ -483,7 +491,7 @@ function addMsg(role,content){
     const edits=parseEdits(text);
     if(edits.length){const b=document.createElement('button');b.className='abtn';b.textContent=`🔧 应用${edits.length}处修改`;b.onclick=()=>applyEdits(edits,b);d.appendChild(b)}
     const cb=[...text.matchAll(/```[\w]*\n([\s\S]*?)```/g)];
-        if(!edits.length&&cb.length){const b=document.createElement('button');b.className='abtn';b.textContent='📋 替换文件';b.onclick=()=>{if(!cur)return;pushUndo(); F[cur]=cb.map(m=>m[1].trim()).join('\n\n');$('ed').value=F[cur];updLn();autoSave();b.textContent='✅ 已替换';b.classList.add('applied');b.disabled=true};d.appendChild(b)}
+        if(!edits.length&&cb.length){const b=document.createElement('button');b.className='abtn';b.textContent='📋 替换文件';b.onclick=()=>{if(!cur)return; F[cur]=cb.map(m=>m[1].trim()).join('\n\n');$('ed').value=F[cur];pushState(F[cur]);updLn();autoSave();b.textContent='✅ 已替换';b.classList.add('applied');b.disabled=true};d.appendChild(b)}
   }
   $('msgs').appendChild(d);$('msgs').scrollTop=99999;
 }
@@ -566,7 +574,7 @@ async function send(){
     const res=await fetch(`${base}/chat/completions`,{
       method:'POST',
       headers:{'Content-Type':'application/json','Authorization':`Bearer ${key}`},
-      body:JSON.stringify({model,messages:[{role:'system',content:sys},...recentHist],temperature:0.6,stream: false})
+      body:JSON.stringify({model,messages:[{role:'system',content:sys},...recentHist,{role:'assistant',content:'<think>我已完成了思考</think> [Start outputting]:'}],temperature:1,stream: false})
     });
     
     const data=await res.json();
@@ -585,6 +593,7 @@ $('inp').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preve
   await loadAll();
   renderTabs();
   $('ed').value=F[cur];
+  if(cur) undoStack[cur] = [F[cur]];
   updLn();
   // 恢复聊天记录到界面
   hist.forEach(h=>{
