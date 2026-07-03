@@ -574,7 +574,7 @@ async function send(){
     const res=await fetch(`${base}/chat/completions`,{
       method:'POST',
       headers:{'Content-Type':'application/json','Authorization':`Bearer ${key}`},
-      body:JSON.stringify({model,messages:[{role:'system',content:sys},...recentHist,{role:'assistant',content:'<think>我已完成了思考</think> [Start outputting]:'}],temperature:1,stream: false})
+      body:JSON.stringify({model,messages:[{role:'system',content:sys},...recentHist],temperature:1,stream: false})
     });
     
     const data=await res.json();
